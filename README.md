@@ -4,7 +4,8 @@
 
 **Lien direct : https://ardalber.github.io/Saute-Nuages/**
 
-Aide **Plume**, le petit oiseau jaune, à sauter de nuage en nuage pour grimper jusqu'aux étoiles.
+**But du jeu : aspirer un maximum de boules !**
+**Plume**, le petit oiseau jaune, saute de nuage en nuage. Passe près d'une boule : il l'aspire tout seul avec son bec.
 Plus tu montes, plus le ciel passe au coucher de soleil puis à la nuit… et plus c'est dur !
 
 ## Installer sur le téléphone
@@ -20,8 +21,8 @@ Plus tu montes, plus le ciel passe au coucher de soleil puis à la nuit… et pl
 - **Téléphone** : garde le doigt à gauche ou à droite de l'écran pour le diriger.
 - **Ordinateur** : flèches gauche / droite (ou Q / D).
 - Sortir d'un côté de l'écran fait revenir de l'autre.
-- ⭐ Étoile = +25 points · Nuage bleu = il bouge · Nuage gris = il casse après un rebond · Ressort rouge = super saut.
-- Si Plume tombe en bas de l'écran, c'est perdu. Ton record est gardé.
+- Boule de couleur = 1 point · Boule dorée = 5 points · Nuage bleu = il bouge · Nuage gris = il casse après un rebond · Ressort rouge = super saut.
+- Si Plume tombe en bas de l'écran, c'est perdu. Ton record de boules est gardé.
 
 ## Fichiers
 
