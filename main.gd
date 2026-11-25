@@ -1,7 +1,7 @@
 extends Node2D
 # SAUTE-NUAGES
-# Plume rebondit tout seul sur les nuages : on le dirige à gauche ou à droite
-# pour grimper le plus haut possible. Tout est dessiné par le code.
+# Plume rebondit tout seul sur les nuages : on le dirige à gauche ou à droite.
+# But du jeu : aspirer un maximum de boules. Tout est dessiné par le code.
 
 const W := 540.0                # largeur du jeu (la hauteur s'adapte à l'écran)
 const GRAVITY := 1900.0
@@ -12,6 +12,8 @@ const ACCEL := 2800.0
 const R := 22.0                 # rayon de Plume
 const CLOUD_TOP := 16.0         # dessus du nuage par rapport à son centre
 const SAVE_PATH := "user://saute_nuages.json"
+const SUCK_R := 125.0           # portée de l'aspiration
+const BALL_COLORS := ["ff5d73", "4dabf7", "51cf66", "cc5de8", "ff922b", "22d3c5"]
 
 enum { TITLE, PLAY, OVER }
 enum { NORMAL, MOVING, FRAGILE, GROUND }
@@ -23,13 +25,16 @@ var vel := Vector2.ZERO
 var cam_y := 0.0
 var start_y := 0.0
 var top_y := 0.0
-var bonus := 0
+var combo := 0
+var combo_t := 0.0
+var sucking := 0.0
 var score := 0
 var best := 0
 var new_best := false
 var clouds: Array = []
-var stars: Array = []
+var balls: Array = []
 var puffs: Array = []
+var floats: Array = []
 var bg_stars: Array = []
 var bg_clouds: Array = []
 var next_y := 0.0
@@ -65,7 +70,7 @@ func _ready() -> void:
 func reset_game() -> void:
 	H = get_viewport_rect().size.y
 	clouds.clear()
-	stars.clear()
+	balls.clear()
 	puffs.clear()
 	cam_y = 0.0
 	start_y = H - 110.0
@@ -75,7 +80,7 @@ func reset_game() -> void:
 	pos = Vector2(W * 0.5, start_y - CLOUD_TOP - R)
 	vel = Vector2(0.0, JUMP_V * 0.6)
 	top_y = pos.y
-	bonus = 0
+	combo = 0
 	score = 0
 	new_best = false
 	play_t = 0.0
@@ -84,7 +89,7 @@ func reset_game() -> void:
 func start_play() -> void:
 	state = PLAY
 	play_t = 0.0
-	_sound("star")
+	_sound("spring")
 
 
 func game_over() -> void:
@@ -96,11 +101,28 @@ func game_over() -> void:
 		new_best = true
 		_save_best()
 	if autoplay:
-		print("PARTIE score=%d hauteur=%d" % [score, int((start_y - top_y) / 10.0)])
+		print("PARTIE boules=%d hauteur=%d" % [score, int((start_y - top_y) / 10.0)])
 
 
 func _difficulty(y: float) -> float:
 	return clampf((start_y - y) / 25000.0, 0.0, 1.0)
+
+
+func _add_balls(x: float, y: float, gap: float) -> void:
+	# Une boule, ou une petite file de boules en l'air entre deux nuages
+	var n := 1
+	var r := rng.randf()
+	if r < 0.25:
+		n = 3
+	elif r < 0.45:
+		n = 2
+	var dx := rng.randf_range(-40.0, 40.0)
+	for i in n:
+		var big := rng.randf() < 0.07
+		var bx := clampf(x + dx * i, 20.0, W - 20.0)
+		var col := Color("ffd43b") if big else Color(BALL_COLORS[rng.randi() % BALL_COLORS.size()])
+		balls.append({"x": bx, "y": y - i * minf(gap, 140.0) / n, "taken": false, "pull": false,
+			"v": 0.0, "ph": rng.randf() * TAU, "big": big, "col": col})
 
 
 func _cloud(x: float, y: float, w: float, type: int) -> Dictionary:
@@ -125,8 +147,8 @@ func _spawn_until(limit_y: float) -> void:
 			c.spring = true
 			c.spring_off = rng.randf_range(-w * 0.25, w * 0.25)
 		clouds.append(c)
-		if not c.spring and rng.randf() < 0.22:
-			stars.append({"x": x, "y": next_y - 62.0, "taken": false, "ph": rng.randf() * TAU})
+		if not c.spring and rng.randf() < 0.6:
+			_add_balls(x, next_y - 60.0, gap)
 		# Nuages fragiles en plus : ils ne cassent qu'après un rebond
 		if gap > 80.0 and rng.randf() < lerpf(0.1, 0.4, d):
 			var fw := rng.randf_range(80.0, 100.0)
@@ -161,7 +183,6 @@ func _process(delta: float) -> void:
 		if target < cam_y:
 			cam_y = target
 		top_y = minf(top_y, pos.y)
-		score = int((start_y - top_y) / 10.0) + bonus
 		_spawn_until(cam_y - 250.0)
 		if pos.y - cam_y > H + R * 2.0:
 			game_over()
@@ -175,6 +196,10 @@ func _process(delta: float) -> void:
 		p.p += p.v * delta
 		p.v *= 0.92
 	puffs = puffs.filter(func(p): return p.life > 0.0)
+	for f2 in floats:
+		f2.life -= delta
+		f2.p.y -= 60.0 * delta
+	floats = floats.filter(func(f2): return f2.life > 0.0)
 	queue_redraw()
 
 
@@ -222,13 +247,39 @@ func _update_player(delta: float) -> void:
 				_bounce(c)
 				break
 
+	combo_t -= delta
+	if combo_t <= 0.0:
+		combo = 0
+	sucking = maxf(0.0, sucking - delta * 3.0)
 	if state == PLAY:
-		for s in stars:
-			if not s.taken and pos.distance_to(Vector2(s.x, s.y)) < R + 18.0:
-				s.taken = true
-				bonus += 25
-				_sound("star")
-				_burst(Vector2(s.x, s.y), Color(1.0, 0.85, 0.25), 10)
+		# Aspiration : les boules proches filent en spirale vers le bec de Plume
+		var mouth := pos + Vector2(facing * 14.0, 2.0)
+		for b in balls:
+			if b.taken:
+				continue
+			var bp := Vector2(b.x, b.y)
+			var dist := bp.distance_to(mouth)
+			if not b.pull and dist < SUCK_R:
+				b.pull = true
+				_sound("suck")
+			if b.pull:
+				sucking = 1.0
+				b.v = minf(b.v + 2600.0 * delta, 1400.0)
+				var np := bp.move_toward(mouth, b.v * delta)
+				if np.distance_to(mouth) > 1.0:
+					np += (np - mouth).orthogonal().normalized() * minf(dist, 30.0) * 4.0 * delta
+				b.x = np.x
+				b.y = np.y
+				if np.distance_to(mouth) < 14.0:
+					b.taken = true
+					var gain := 5 if b.big else 1
+					score += gain
+					combo += 1
+					combo_t = 0.8
+					_pop(combo)
+					_burst(mouth, b.col, 6)
+					if b.big:
+						_float_text("+5", mouth, Color("ffd43b"))
 
 
 func _bounce(c: Dictionary) -> void:
@@ -249,7 +300,7 @@ func _bounce(c: Dictionary) -> void:
 func _cleanup() -> void:
 	var limit := cam_y + H + 150.0
 	clouds = clouds.filter(func(c): return c.type == GROUND and state == TITLE or c.y < limit)
-	stars = stars.filter(func(s): return s.y < limit and not (s.taken and s.y > cam_y + H))
+	balls = balls.filter(func(b): return b.y < limit and not b.taken)
 
 
 func _burst(at: Vector2, col: Color, n: int) -> void:
@@ -346,9 +397,10 @@ func _sp(x: float, y: float) -> Vector2:
 
 func _draw() -> void:
 	_draw_sky()
-	for s in stars:
-		if not s.taken:
-			_draw_star(_sp(s.x, s.y + sin(t * 3.0 + s.ph) * 5.0), 15.0, t * 1.5 + s.ph)
+	if state == PLAY and sucking > 0.0:
+		_draw_suction()
+	for b in balls:
+		_draw_ball(b)
 	for c in clouds:
 		_draw_cloud(c)
 	for p in puffs:
@@ -356,6 +408,10 @@ func _draw() -> void:
 		col.a *= clampf(p.life / 0.45, 0.0, 1.0)
 		draw_circle(p.p - Vector2(0, cam_y), p.r, col)
 	_draw_player()
+	for f2 in floats:
+		var fc: Color = f2.col
+		fc.a = clampf(f2.life * 2.0, 0.0, 1.0)
+		_text(f2.txt, f2.p - Vector2(W * 0.5, cam_y), 30, fc)
 	_draw_hud()
 
 
@@ -452,6 +508,36 @@ func _draw_spring(base: Vector2, pressed: bool) -> void:
 	draw_rect(Rect2(base.x - 13.0, base.y - h - 5.0, 26.0, 6.0), Color(0.93, 0.25, 0.3))
 
 
+func _draw_ball(b: Dictionary) -> void:
+	var r := 15.0 if b.big else 10.0
+	var p := _sp(b.x, b.y)
+	if not b.pull:
+		p.y += sin(t * 3.0 + b.ph) * 5.0
+	else:
+		r *= clampf(Vector2(b.x, b.y).distance_to(pos) / 60.0, 0.45, 1.0)
+	if p.y < -30.0 or p.y > H + 30.0:
+		return
+	var col: Color = b.col
+	draw_circle(p + Vector2(0, 2), r, col.darkened(0.35))
+	draw_circle(p, r, col)
+	draw_circle(p + Vector2(-r * 0.35, -r * 0.35), r * 0.32, Color(1, 1, 1, 0.75))
+	if b.big:
+		draw_arc(p, r + 4.0 + sin(t * 6.0) * 2.0, 0.0, TAU, 24, Color(1, 0.95, 0.5, 0.7), 2.0)
+
+
+func _draw_suction() -> void:
+	# Arcs en spirale qui montrent l'aspiration autour du bec de Plume
+	var c := _sp(pos.x + facing * 14.0, pos.y + 2.0)
+	var a := 0.4 * sucking
+	for i in 3:
+		var rr := fposmod(SUCK_R - t * 160.0 - i * SUCK_R / 3.0, SUCK_R) + 12.0
+		draw_arc(c, rr, t * 4.0 + i, t * 4.0 + i + 2.2, 20, Color(1, 1, 1, a * (rr / SUCK_R)), 3.0)
+
+
+func _float_text(txt: String, at: Vector2, col: Color) -> void:
+	floats.append({"txt": txt, "p": at, "col": col, "life": 0.8})
+
+
 func _draw_star(c: Vector2, r: float, rot: float) -> void:
 	var pts := PackedVector2Array()
 	for i in 10:
@@ -485,8 +571,13 @@ func _draw_player() -> void:
 		draw_circle(e + look, 3.5, Color("1b1b2a"))
 	draw_circle(Vector2(-13 + facing * 3.0, 5), 4.0, Color(1, 0.5, 0.5, 0.5))
 	draw_circle(Vector2(13 + facing * 3.0, 5), 4.0, Color(1, 0.5, 0.5, 0.5))
-	draw_colored_polygon(PackedVector2Array([Vector2(facing * 12.0, -1), Vector2(facing * 25.0, 3),
-		Vector2(facing * 12.0, 8)]), Color("ff8c1a"))
+	var open := 6.0 * sucking
+	draw_colored_polygon(PackedVector2Array([Vector2(facing * 12.0, -1 - open), Vector2(facing * 25.0, 3 - open * 0.5),
+		Vector2(facing * 12.0, 3)]), Color("ff8c1a"))
+	draw_colored_polygon(PackedVector2Array([Vector2(facing * 12.0, 4), Vector2(facing * 23.0, 5 + open * 0.5),
+		Vector2(facing * 12.0, 8 + open)]), Color("e8730c"))
+	if open > 1.0:
+		draw_circle(Vector2(facing * 15.0, 3.5), open * 0.5, Color("5a1a00"))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
@@ -501,20 +592,25 @@ func _draw_hud() -> void:
 		var panel := StyleBoxFlat.new()
 		panel.bg_color = Color(0.06, 0.12, 0.32, 0.55)
 		panel.set_corner_radius_all(26)
-		draw_style_box(panel, Rect2(18, H * 0.2 - 72, W - 36, H * 0.16 + 72 + (190.0 if best > 0 else 150.0)))
+		draw_style_box(panel, Rect2(18, H * 0.2 - 72, W - 36, H * 0.16 + 72 + (215.0 if best > 0 else 175.0)))
 		_text("SAUTE-NUAGES", Vector2(0, H * 0.2), 58, Color("fff4c2"))
-		_text("Aide Plume à grimper jusqu'aux étoiles !", Vector2(0, H * 0.2 + 46), 22, Color.WHITE)
+		_text("Fais aspirer un max de boules à Plume !", Vector2(0, H * 0.2 + 46), 22, Color.WHITE)
 		_text("Touche à gauche ou à droite de l'écran", Vector2(0, H * 0.36), 22, Color.WHITE)
 		_text("pour diriger Plume", Vector2(0, H * 0.36 + 30), 22, Color.WHITE)
 		_text("(sur ordinateur : flèches gauche / droite)", Vector2(0, H * 0.36 + 62), 18, Color(1, 1, 1, 0.85))
-		_text("Nuage gris = il casse   ·   Ressort rouge = super saut", Vector2(0, H * 0.36 + 100), 17, Color(1, 1, 1, 0.85))
+		_text("Passe près des boules : il les aspire tout seul", Vector2(0, H * 0.36 + 100), 18, Color(1, 1, 1, 0.9))
+		_text("Boule dorée = 5  ·  Nuage gris = il casse  ·  Ressort = super saut", Vector2(0, H * 0.36 + 128), 15, Color(1, 1, 1, 0.85))
 		if best > 0:
-			_text("Record : %d" % best, Vector2(0, H * 0.36 + 142), 24, Color("ffe066"))
+			_text("Record : %d boules" % best, Vector2(0, H * 0.36 + 168), 24, Color("ffe066"))
 		if blink:
 			_text("Touche l'écran pour jouer", Vector2(0, H * 0.62), 30, Color("fff4c2"))
 		return
 
-	_text(str(score), Vector2(20, 56), 44, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, W - 40)
+	draw_circle(Vector2(36, 42), 15.0, Color("ff5d73").darkened(0.35))
+	draw_circle(Vector2(36, 40), 15.0, Color("ff5d73"))
+	draw_circle(Vector2(31, 35), 5.0, Color(1, 1, 1, 0.75))
+	_text(str(score), Vector2(60, 56), 44, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, W - 80)
+	_text("%d m" % int((start_y - top_y) / 10.0), Vector2(20, 76), 18, Color(1, 1, 1, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, W - 40)
 	_text("Record : %d" % maxi(best, score), Vector2(20, 46), 20, Color("fff4c2"), HORIZONTAL_ALIGNMENT_RIGHT, W - 40)
 
 	if state == PLAY and play_t < 4.0:
@@ -526,7 +622,7 @@ func _draw_hud() -> void:
 	if state == OVER:
 		draw_rect(Rect2(0, 0, W, H), Color(0.02, 0.03, 0.12, minf(0.45, over_t)))
 		_text("Plume est tombé !", Vector2(0, H * 0.3), 44, Color("fff4c2"))
-		_text("Score : %d" % score, Vector2(0, H * 0.3 + 70), 36, Color.WHITE)
+		_text("Boules aspirées : %d" % score, Vector2(0, H * 0.3 + 70), 34, Color.WHITE)
 		if new_best:
 			_text("Nouveau record !", Vector2(0, H * 0.3 + 120), 30, Color("ffe066"))
 		else:
@@ -542,6 +638,7 @@ func _make_sounds() -> void:
 		"jump": [320.0, 720.0, 0.11, 0.35, false],
 		"spring": [260.0, 1300.0, 0.32, 0.4, false],
 		"star": [880.0, 1500.0, 0.16, 0.3, false],
+		"suck": [500.0, 260.0, 0.12, 0.12, false],
 		"break": [0.0, 0.0, 0.2, 0.35, true],
 		"fall": [620.0, 140.0, 0.6, 0.35, false],
 	}
@@ -573,6 +670,15 @@ func _tone(f0: float, f1: float, dur: float, vol: float, noise: bool) -> AudioSt
 	return w
 
 
+func _pop(n: int) -> void:
+	# « Pop » de plus en plus aigu quand on enchaîne les boules
+	if autoplay:
+		return
+	var p: AudioStreamPlayer = sfx["star"]
+	p.pitch_scale = minf(0.8 + n * 0.08, 2.0)
+	p.play()
+
+
 func _sound(k: String) -> void:
 	if sfx.has(k) and not autoplay:
 		sfx[k].play()
@@ -585,7 +691,7 @@ func _load_best() -> void:
 		var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
 		var data = JSON.parse_string(f.get_as_text())
 		if data is Dictionary:
-			best = int(data.get("best", 0))
+			best = int(data.get("best_boules", 0))
 
 
 func _save_best() -> void:
@@ -593,4 +699,4 @@ func _save_best() -> void:
 		return
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
-		f.store_string(JSON.stringify({"best": best}))
+		f.store_string(JSON.stringify({"best_boules": best}))
