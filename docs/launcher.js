@@ -14,6 +14,26 @@
     deferredPrompt = e;
   });
 
+  // Mise à jour automatique : si une nouvelle version du jeu a été publiée,
+  // on l'active tout de suite (sinon l'appli installée garderait l'ancienne).
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+      if (!reg) return;
+      function activate(w) {
+        if (w && navigator.serviceWorker.controller) w.postMessage('update');
+      }
+      if (reg.waiting) activate(reg.waiting);
+      reg.addEventListener('updatefound', function () {
+        var w = reg.installing;
+        if (!w) return;
+        w.addEventListener('statechange', function () {
+          if (w.state === 'installed') activate(w);
+        });
+      });
+      reg.update().catch(function () {});
+    });
+  }
+
   if (standalone) return;
 
   function el(tag, cls, text) {
